@@ -1,6 +1,6 @@
 # ms-rawvf
 
-Raw Video Format (RAWVF) is a "human readable minesweeper video format" created in 2009. Videos from any Minesweeper game can be translated into this format for cross-compatibility.
+Raw Video Format (RAWVF) is a "human readable minesweeper video format" created in 2009. Minesweeper videos can be translated into this format for cross-compatibility.
 
 Supported Minesweeper versions are:
 
