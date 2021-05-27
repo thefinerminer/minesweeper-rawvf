@@ -10,7 +10,7 @@ Supported Minesweeper games and video formats are:
 - <b>Vienna MineSweeper</b> All versions up to 3.0C & 3.0H (*UMF & *RMV format)
 - <b>FreeSweeper</b> All versions up to R10 (*FVSF)
 
-Videos contain mouse events and timestamps. Each programmer can write a "parser" to translate their proprietary video format into RAW format. The parser reads the video and puts a row into a text file for each mouse event. Most videos formats also store basic information about the game such as program, version, width, height, mode, status, time and number of mines. 
+Videos contain mouse events and timestamps. Each programmer can write a "parser" to translate their proprietary video format into RAW format. The parser reads the video and puts a row into a text file for each mouse event. Most video formats will also store some basic information about the game such as program, version, width, height, mode, status, time and number of mines. 
 
 This project hosts parser code for all listed versions except Minesweeper X as its programmer wishes to keep the MSX video encryption method private. The project also hosts compiled binaries. To use a parser, open it in a command prompt and type "parser_xyz video.xzy>video.txt". Using Windows type "parser_xyz.exe video.xzy>video.txt".
 
