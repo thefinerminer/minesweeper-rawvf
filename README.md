@@ -12,9 +12,9 @@ Supported Minesweeper games and video formats are:
 
 Videos contain mouse events and timestamps. Each programmer can write a "parser" to translate their proprietary video format into RAW format. The parser reads the video and puts a row into a text file for each mouse event. Most videos formats also store basic information about the game such as program, version, width, height, mode, status, time and number of mines. 
 
-This project hosts parser code for all listed versions except Minesweeper X as its programmer wishes to keep the MSX video encryption method private. The project also hosts compiled binaries. To use a parser, open it in a command prompt and type "parser-name video-name.xzy>video-name.txt".
+This project hosts parser code for all listed versions except Minesweeper X as its programmer wishes to keep the MSX video encryption method private. The project also hosts compiled binaries. To use a parser, open it in a command prompt and type "parser_xyz video.xzy>video.txt".
 
-In addition to each parser, you can use the master parser ("parser_raw") which reads parsed files and calculates board events and statistics. For example, the master parser adds events such as flags, questionmarks, numbers, mines, openings and tells you which squares were opened. This saves you the trouble of calculating everything and makes it easy to build a video player.
+In addition to each parser, you can use the master parser ("parser_raw") which reads parsed files and calculates board events and statistics. For example, the master parser adds events such as flags, questionmarks, numbers, mines, openings and tells you which squares were opened. This saves you the trouble of calculating everything and makes it easy to build a video player. In the command prompt type "parser_raw video.txt>raw.txt".
 
 A great example of an online video player that reads RAWVF can be found here:
 
