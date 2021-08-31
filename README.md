@@ -25,6 +25,10 @@ This video player is used on the following Minesweeper rankings:
 - <a href="https://minesweepergame.com">minesweepergame.com</a> - World Rankings
 - <a href="http://www.saolei.wang">saolei.wang</a> - China Rankings
 
+A related project for the Scoreganizer site parses Arbiter and Viennasweeper using Python:
+
+- https://github.com/ralokt/sweeping-view
+
 The original format was invented by Cryslon (Arbiter, FreeSweeper) with help from Curtis (MSX) and Tommy (ViennaSweeper). Clone bug fixes were added by crazyks before the project died in 2014 and the final format was called "RAW 5". This GitHub repo represents a major update in 2020 by thefinerminer and each C source code file contains detailed comments released as RAW 6.
 
 Details of the format can be found here:
