@@ -19,6 +19,9 @@
  Updated 2021-05-26 by Damien to remove legacy Freesweeper code and remove Arbiter cheat
  code as Arbiter does not allow cheat mode videos.
  
+ Updated 2023-04-14 due to rare case with more than one '[' before the timestamp. Released
+ as version 6.1.
+ 
  Note Arbiter internals operate to 2 decimal places. You cannot get 3 decimal places
  by subtracting timestamp_a from timestamp_b because these timestamps do not perfectly
  match start and finish of the game timer. This versions adds a fake 0 as the third
@@ -182,11 +185,33 @@ int readavf()
 	
 	//Search through bytes for timestamp which starts after the first '[' bracket
 	//Note timestamp_a only became a full timestamp (with year and month) in version 0.46.1
+	//This code finds the '[' then moves one extra byte when found
 	while(cr[3]!='[')
 	{	
 	cr[0]=cr[1];cr[1]=cr[2];cr[2]=cr[3];cr[3]=_fgetc(AVF);
 	}
+
+	//Once found update the 8 byte array by moving along 1 byte
 	cr[0]=cr[1];cr[1]=cr[2];cr[2]=cr[3];cr[3]=_fgetc(AVF);
+
+	//On rare occasions there is a '[' before the one we need to find	
+	//If this is the correct location the [4] will be the '|' after the '['	
+	cr[4]=_fgetc(AVF);
+	
+	if(cr[4]!=124)
+	{
+		//Discard 2 bytes to get back on track
+		_fgetc(AVF);
+		_fgetc(AVF);
+
+		while(cr[3]!='[')
+		{	
+			cr[0]=cr[1];cr[1]=cr[2];cr[2]=cr[3];cr[3]=_fgetc(AVF);
+		}
+
+		//Once found we move the 4 bytes along one position
+		cr[0]=cr[1];cr[1]=cr[2];cr[2]=cr[3];cr[3]=_fgetc(AVF);
+	}
 	
 	//See if Questionmark option was turned on	
 	if(cr[0]!=17 && cr[0]!=127) return 0;
