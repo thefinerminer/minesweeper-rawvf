@@ -17,6 +17,9 @@
  Additional update 2021-05-24 per Tommy to add 3 new fields (nick, country, token) for 
  Viennasweeper 3.1. 
  
+ Additional update 2023-04-14 to add loop to find last timed event. In most videos this
+ is 3rd or 4th last event but sometimes more events need to be checked. Version 6.1.
+ 
  Works on all known RMV versions but not earlier UMF files.
 *****************************************************************/
 
@@ -110,7 +113,7 @@ int getint2(FILE* f)
 	//This code reads 2 bytes and puts them in a 4 byte int
 	//You cannot "add" bytes in the normal sense, instead you perform shift operations
 	//Multiplying by 256 is the same as shifting left by 1 byte (8 bits)
-	//The result is c[0] is moved to int byte 3 while c[1] stayes in int byte 4
+	//The result is c[0] is moved to int byte 3 while c[1] stays in int byte 4
 	return (int)c[1]+c[0]*256;
 }
 
@@ -446,7 +449,7 @@ void writetxt()
 	const char* mode_names[]={"Classic","UPK","Cheat","Density"};
 
 	//Code version and Program
-	printf("RawVF_Version: Rev6\n");
+	printf("RawVF_Version: Rev6.1\n");
 	printf("Program: %s\n",program);
 
 	//Print Version
@@ -508,28 +511,22 @@ void writetxt()
 	//Print Time
     printf("Time: ");
 
-	//Time is taken from the last mouse event
-	//Usually this is the 3rd last printed event
-	if(i=size-3)
+
+	//Number events and win status events do not have a time
+	//So in most videos the 3rd or 4th last event is the final timed event
+	//Opening many cells on the last click needs a loop to find the last timed event
+   	for (i=size-3;i>size-20;--i)
 	{
 		print_event2(video+i);
 		if(score!=0)
 		{
-			printf("%d.%03d\n",score/1000,score%1000);
+			//printf("%d.%03d\n",score/1000,score%1000);
+			printf("g3 \n");
 			score_check=1;
 		}
-   }
-	//Sometimes it is the 4th last printed event
-	if(score_check!=1)
-	{
-		if(i=size-4)
+		if(score==1)
 		{
-			print_event2(video+i);
-			if(score!=0)
-			{
-				printf("%d.%03d\n",score/1000,score%1000);
-				score_check=1;
-			}
+		break;
 		}
 	}
 
@@ -638,4 +635,3 @@ int main(int argc,char** argv)
 	if(argc==2) pause();
 	return 0;
 }
-
