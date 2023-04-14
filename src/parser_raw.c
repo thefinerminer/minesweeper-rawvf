@@ -1,116 +1,68 @@
 /*****************************************************************
- Original RAWVF2RAWVF program by Maksim Bashov 2013-07-29. The program notes warned 
- "the following code is much more awful than you may expect".
+ Original script by Maksim Bashov 2012-10-23.
  
- Program was modified by Zhou Ke (crazyks) 2014-04-18. This fixed 2 bugs in the valeq() 
- function relating to incrementing a count. It also fixed a bug where the len variable 
- was called while being defined so results were off by 1 byte.
+ Modified during 2019-02 by Damien Moore. Split Program string to extract Version 
+ and added Time, 3BV, 3BVS, Timestamp, Style, Questionmarks and Status. On 2019-02-24 
+ fixed method for printing mouse event times. On 2019-03-04 made program backwards 
+ compatible with Release 2.2 and earlier versions that have a shorter header.
  
- Modified by Damien Moore for a month ending 2020-02-09. Changes included:
+ Modified 2020-01-25 by Damien Moore as Release 2 beta and earlier versions do not have 
+ 3bv, 3bvs or Timestamp values. Tidied code and wrote detailed comments. On 2020-02-03 
+ fixed a major bug that caused Solved 3BV (in RAWVF2RAWVF) to be incorrect in certain
+ videos. This bug occurred when using event[cur++] in the function used to create the
+ missing first left click (since Viennasweeper does not record mouse event prior to the
+ time starting and it is the release of the button that starts the timer). This version
+ is being released as Viennasweeper (RMV) RAW version 6.
  
- - Fixed bug where error check failed due to differences between Linux and Windows.
- - Fix bug with number events so cell co-ordinates always start from 1 instead of 0.
- - Fixed bug where check_win() printed to screen instead of selected output method.
- - Fixed bug where check_win() was not called after openings.
- - Fixed bug where qm was checked instead of !qm.
- - Removed claims_win variable as the updated Viennasweeper parser makes this redundant.
- - Renamed variables to remove confusion over hun and ths in score calculations.
- - Truncated decimals in various calculations instead of rounding.
- - Aligned event names to RAWVF version 5 standard and removed unused functionality.
- - Changed function order so now functions are logically grouped.
- - Added detailed comments throughout file.
-
- This is being released as Rawparser version 6. 
+ Additional update 2021-05-24 per Tommy to add 3 new fields (nick, country, token) for 
+ Viennasweeper 3.1. 
  
- Program works for Minesweeper Clone, Minesweeper Arbiter, Minesweeper X and Viennasweeper 
- in both legal and cheat modes. 
+ Additional update 2023-04-14 to add loop to find last timed event. In most videos this
+ is 3rd or 4th last event but sometimes more events need to be checked. Version 6.1.
  
- The standard legal moves are LC (left click), LR (left release), RC (right click), RR
- (right release), MC (middle press) and MR (middle press). Flags and Questionmarks are
- placed and removed with a RC. The timer starts after the first cell is opened. Cells
- open after a LC-LR sequence. A Chord is when you LC and RC (in any order) then LR and
- RR (at the same time or in that order) on an open cell. If the cell contains a number 
- and touches the same number of flags additional cells touched are opened. The normal 
- chording method is to flag (RC-RR) then chord (LC-RC-LR-RR) in two motions. You can also
- chord by holding SHIFT during a LC-LR. You can also chord with a MC-MR. A fourth method 
- is to flag (RC) then slide onto a number to finish the chord (LC-LR-RR) in one motion 
- known as a 1.5 Click.
- 
- Arbiter 0.44 and earlier allow an illegal move known as a Rilian Click. This occurs when 
- a chord is released on an unopened cell (instead of a number) and the LR occurs after the 
- RR. In legal game play this is a failed chord and nothing happens but a Rilian Click will 
- perform a left click and open the cell. When running this program use the -r option to
- process these correctly.
- 
- Elmar Technique is possible in all official minesweeper versions. This occurs when the left
- mouse button is configured to left click on both press and release. The code in this program
- will process but not identify Elmar Technique (the variable must be set in the minesweeper
- program parser and passed to this program in the input file).
- 
- Program also has code to process FreeSweeper cheat options such as Nono (where holding SHIFT 
- and LC lets you flag multiple cells by dragging the mouse over the cells like in Nonosweeper), 
- Superflag (where RC on a number will flag adjacent cells if their count is the same) and 
- Superclick (where LC on a number does a chord). The code in this program does not change the 
- value of these variables and depends on the underlying minesweeper program parser to include
- these variables in their output.
- 
+ Works on all known RMV versions but not earlier UMF files.
 *****************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-//Note that the version of math.h used depends on compiler
-//You need to append -lm to your compile command
-#include <math.h>
 
-#define MAXLEN 1000
-#define MAXOPS 1000
-#define MAXISLS 1000
+#define MAXREP 100000
+#define MAXNAME 1000
 
-FILE* input;
-FILE* output;
-
-//This defines cell attributes and sets 'board' as a pointer to 'cell'
-//For example, calling board[i].mine calls the value of mine at that cell location
-struct cell
+struct event
 {
-	int mine;					//Value 1 if cell is a mine
-	int opening; 				//Value 1 if cell belongs to an opening
-	int opening2;				//Value 1 if cell belongs to a second opening
-	int island;					//Value 1 if cell belongs to an island of numbers
-	int number;					//Value 1 if cell is a number
-	int rb,re,cb,ce; 			//See init_board() function these are used to identify cell neighbours
-	int opened;					//Value 1 if cell has been opened
-	int flagged,wasted_flag;	//Value 1 for both when flagged but do_chord() function returns wasted_flag to 0
-	int questioned;				//Value 1 if cell has a Questionmark
-	int premium;				//Variable used in ZiNi calculations to assess optimal flagging style strategy
+	int time;
+	int x,y;
+	unsigned char event;
 };
-typedef struct cell cell;
-cell* board;
+typedef struct event event;
 
-//Initiate global variables
-int w,h,m,size;
-int won=0;
-int no_board_events=0,no_zini=0,no_rilian_clicks=1,no_check_info=0;
-int bbbv,openings,islands,zini,gzini,hzini;
-int l_clicks,r_clicks,d_clicks,clicks_15;
-int wasted_l_clicks,wasted_r_clicks,wasted_d_clicks,wasted_clicks_15;
-int rilian_clicks;
-int flags,wasted_flags,unflags,misflags,misunflags;
-int distance;
-int solved_bbbv;
-int closed_cells;
-int size_ops[MAXOPS];
-int size_isls[MAXISLS];
-int solved_ops,solved_isls;
-int left,right,middle,shift_left;
-int chorded,onedotfive;
-int cur_x,cur_y,cur_prec_x,cur_prec_y;
-int cur_time,end_time=0;
-char event[MAXLEN];
-int qm;
-int elmar,nono,superclick,superflag;
+
+FILE* RMV;
+
+//Initialise global variables
+int mode,level,w,h,m;		//Mode, Level, Width, Height, Mines
+int size;					//Number of game events
+int* board;					//Stores board and mine locations
+int qm,nf;					//Questionmarks, Style
+char name[MAXNAME];			//Player name
+char nick[MAXNAME];			//Player nickname
+char country[MAXNAME];		//Player country
+char token[MAXNAME];		//Player token
+char program[MAXNAME];		//Program
+char version[MAXNAME];		//Version string
+char verstring[MAXNAME];	//Substring of Version
+char verlength[MAXNAME];	//Substring of Version
+char timestamp[MAXNAME];	//Timestamp
+event video[MAXREP];		//Game events
+const int square_size=16;	//Cell size used in mouse movement calculations
+int score;					//Time
+int score_check;			//Boolean used to check if Time found from game events
+char bbbv[MAXNAME];			//3bv as a string
+int bbbvint;				//3bv as an integer
+int bbbvs; 					//3bvs during calculations
+float bbbvs_final;			//3bvs with decimals
 
 
 
@@ -136,1378 +88,550 @@ void error(const char* msg)
 
 
 //==============================================================================================
-//Functions to read key:value pairs from the input file header
+//Function is run if there is a parsing error
 //==============================================================================================
-
-//Read key (ie, 'Level')
-int opteq(const char* opt,const char* str)
+_fgetc(FILE* f)
 {
-	int i=0;
-	while(opt[i]!=':' && opt[i]!=' ' && opt[i] && str[i] && tolower(opt[i])==tolower(str[i])) ++i;
-	return opt[i]==':' && str[i]==0;
-}
-
-//Read value (ie, 'Intermediate)
-int valeq(const char *val, const char* str)
-{
-	int i=0, j=0;
-	while(val[i]==' ') i++;
-	while(str[j] && val[i]!='\n' && val[i]!=' ' && val[i] && tolower(str[j])==tolower(val[i])) ++i,++j;
-	return (val[i]=='\n' || val[i]==' ') && str[j]==0;
-}
-
-
-//==============================================================================================
-//Functions to erase board information
-//==============================================================================================
-
-//Erase all information about cells
-void clearboard()
-{
-	int i;
-	closed_cells=size;
-	for(i=0;i<size;++i)
-		board[i].mine=board[i].opened=board[i].flagged=board[i].questioned=board[i].wasted_flag=
-		board[i].opening=board[i].opening2=board[i].island=0;
-}
-
-//Erase all information about cell states
-void restartboard()
-{
-	int i;
-	closed_cells=size;
-	for(i=0;i<size;++i)
-		board[i].opened=board[i].flagged=board[i].wasted_flag=board[i].questioned=0;
-}
-
-
-//==============================================================================================
-//Function to count mines touching a cell
-//==============================================================================================
-int getnumber(int index)
-{
-	int rr,cc;
-	int res=0;
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-			//Increase count if cell is a mine
-			res+=board[cc*h+rr].mine;
-	return res;
-}
-
-
-//==============================================================================================
-//Functions used by init_board() to determine size of Openings and Islands
-//==============================================================================================
-
-//Determine if cell belongs to 1 or 2 Openings and assign it to an Opening ID
-void set_opening_border(int op_id,int index)
-{
-	if(!board[index].opening)
-		board[index].opening=op_id;
-	else if(board[index].opening!=op_id)
-		board[index].opening2=op_id;
-}
-
-//Determine the size (number of cells) in the Opening
-void process_opening(int op_id,int index)
-{
-	int rr,cc;
-	++size_ops[op_id];
-	board[index].opening=op_id;
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-		{
-			int i=cc*h+rr;
-			if(board[i].number && !board[i].mine)
-			{
-				if(board[i].opening!=op_id && board[i].opening2!=op_id) ++size_ops[op_id];
-				set_opening_border(op_id,i);
-			}
-			else if(!board[i].opening && !board[i].mine)
-				process_opening(op_id,i);
-		}		
-}
-
-//Determine the size (number of cells) in the Island
-void process_island(int is_id,int index)
-{
-	int rr,cc;
-	board[index].island=is_id;
-	++size_isls[is_id];
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-		{
-			int i=cc*h+rr;
-			if(!board[i].island && !board[i].mine && !board[i].opening)
-				process_island(is_id,i);
-		}		
-}
-
-
-//==============================================================================================
-//Function to read board layout and count number of Openings and Islands
-//==============================================================================================
-void init_board()
-{
-	int i;
-	int r,c;
-	openings=0;
-	
-	//Determine the neighbourhood for each cell
-	for(r=0;r<h;++r)
+	if(!feof(f)) return fgetc(f); else
 	{
-		for(c=0;c<w;++c)
-		{
-			int index=c*h+r;
-			board[index].rb = r?r-1:r;
-			board[index].re = r==h-1?r:r+1;
-			board[index].cb = c?c-1:c;
-			board[index].ce = c==w-1?c:c+1;
-		}
+	error("Error 4: Unexpected end of file");
 	}
-	
-	//Set initial premium for each cell (for ZiNi calculations)
-	for(i=0;i<size;++i)
-	{
-		//Premium is used in ZiNi calculations
-		//ZiNi attempts to determine the optimal flagging strategy
-		//Premium tries to determine potential contribution of cell to optimal solve of game
-		//The fewer clicks needed to perform a useful action (like a chord) the higher the premium
-		//Mines have no premium
-		//An opened cell is more useful than a closed cell
-		//Each correct flag makes a number more useful		
-		//A higher number is less useful because more flags are required		
-		board[i].premium= -(board[i].number=getnumber(i))-2;
-	}
-	
-	for(i=0;i<size;++i)
-		if(!board[i].number && !board[i].opening)
-		{
-			if(++openings>MAXOPS) error("Too many openings");
-			size_ops[openings]=0;
-			//Send to function to determine size of Opening			
-			process_opening(openings,i);
-		}
-		
-	for(i=0;i<size;++i)
-		if(!board[i].opening && !board[i].island && !board[i].mine)
-		{
-			if(++islands>MAXISLS) error("Too many islands");
-			size_isls[islands]=0;
-			//Send to function to determine size of Island
-			process_island(islands,i);
-		}
 }
 
 
+
 //==============================================================================================
-//Function used by both the calc_bbbv() and calc_zini() functions
+//Functions to parse either 2, 3 or 4 bytes at a time
 //==============================================================================================
-int getadj3bv(int index)
+int getint2(FILE* f)
 {
-	int res=0;
-	int rr,cc;
-	if(!board[index].number) return 1;
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-		{
-			int i=cc*h+rr;
-			res+=(!board[i].mine && !board[i].opening); 
-		}
-	//Number belongs to the edge of an opening	
-	if(board[index].opening) ++res;
-	//Number belongs to the edge of a second opening
-	if(board[index].opening2) ++res;
-	//Return number (0-9)
-	return res;
+	//Creates a string array called c holding 2 bytes
+	unsigned char c[2];
+	//This retrieves two bytes
+	c[0]=_fgetc(f);c[1]=_fgetc(f);
+	//Return ends the function and returns output to variable getint2
+	//This code reads 2 bytes and puts them in a 4 byte int
+	//You cannot "add" bytes in the normal sense, instead you perform shift operations
+	//Multiplying by 256 is the same as shifting left by 1 byte (8 bits)
+	//The result is c[0] is moved to int byte 3 while c[1] stays in int byte 4
+	return (int)c[1]+c[0]*256;
 }
 
-
-//==============================================================================================
-//Function to calculate 3bv
-//==============================================================================================
-void calc_bbbv()
+int getint3(FILE* f)
 {
+	//Creates a string array called c holding 3 bytes
+	unsigned char c[3];
+	c[0]=_fgetc(f);c[1]=_fgetc(f);c[2]=_fgetc(f);
+	return (int)c[2]+c[1]*256+c[0]*65536;
+}
+int getint(FILE* f)
+{
+	//Creates a string array called c holding 4 bytes
+	unsigned char c[4];
 	int i;
-	//Start by setting 3bv equal to the number of openings
-	bbbv=openings;
-	for(i=0;i<size;++i)
+	for(i=0;i<4;++i) c[i]=_fgetc(f);
+	return (int)c[2]+c[3]*256+c[0]*65536+c[1]*16777216;
+}
+
+
+
+//==============================================================================================
+//Function is used to print game events
+//==============================================================================================
+void print_event(event* e)
+{
+	const char* event_names[]={"","mv","lc","lr","rc","rr","mc","mr","","pressed","pressedqm","closed",
+		"questionmark","flag","blast","lost","won","nonstandard","number0","number1","number2","number3",
+		"number4","number5","number6","number7","number8","blast"};
+	unsigned char c=e->event;
+	
+	//Mouse event	
+	if(c<=7)
 	{
-		//Increase 3bv count if it is a non-edge number
-		if(!board[i].opening && !board[i].mine)	++bbbv;
-		board[i].premium+=getadj3bv(i);
+		printf("%d.%03d %s %d %d (%d %d)\n",
+			e->time/1000,e->time%1000,
+			event_names[c],
+			e->x/square_size+1,e->y/square_size+1,
+			e->x,e->y);
+	}
+	//Board event	
+	else if(c<=14 || (c>=18 && c<=27))
+	{
+		printf("%s %d %d\n",
+			event_names[c],
+			e->x,e->y);
+	}
+	//End event (ie, 'blast')
+	else if(c<=17)
+	{
+		printf("%s\n",
+			event_names[c]);
 	}
 }
 
 
 //==============================================================================================
-//Functions used only by the calc_zini() function
+//Function is used to fetch Time and Status
 //==============================================================================================
-
-//Open cell
-void open(int index)
-{
-	int rr,cc;
-	board[index].opened=1;
-	++board[index].premium;
+void print_event2(event* e)
+{	
+	const char* event_names[]={"","mv","lc","lr","rc","rr","mc","mr","","pressed","pressedqm","closed",
+		"questionmark","flag","blast","lost","won","nonstandard","number0","number1","number2","number3",
+		"number4","number5","number6","number7","number8","blast"};
+	unsigned char c=e->event;
 	
-	//Check cell is a number and not on the edge of an opening
-	if(!board[index].opening)
-		for(rr=board[index].rb;rr<=board[index].re;++rr)
-			for(cc=board[index].cb;cc<=board[index].ce;++cc)
-				--board[cc*h+rr].premium;
-	//Decrease count of unopened cells		
-	--closed_cells;
+	//Mouse event
+	if(c<=7)
+	{
+	//Put time of click into score variable
+	score=e->time;
+	}
+	else {score=0;}
+
+	//Win or lose status
+	if(c==16||c==15)
+	{
+	printf("%s\n",event_names[c]);
+	}
 }
 
-//Perform checks before opening cells
-void reveal(int index)
-{
-	//Do not open flagged or already open cells
-	if(board[index].opened) return;
-	if(board[index].flagged) return;
 
-	//Open if cell is a non-zero number
-	if(board[index].number) 
-		open(index);
-	//Cell is inside an opening (not a number on the edge)
+//==============================================================================================
+//Function is used to read video data
+//==============================================================================================
+int readrmv()
+{	
+	//Initialise local variables	
+	int i,j,cur=0;
+	unsigned char c,d;
+	const char* header_1="*rmv";
+	int fs;
+	int result_string_size; //Value gives string length starting at LEVEL in header
+	int version_info_size; 	//Value gives string length starting at Viennasweeper in header
+	int player_info_size; 	//Value gives string length starting at Name in header
+	int board_size;
+	int preflags_size;
+	int properties_size;
+	int vid_size;
+	int cs_size;
+	int num_player_info;
+	int name_length;
+	int nick_length;
+	int country_length;
+	int token_length;
+	int num_preflags;
+	int is_first_event=1;
+
+	//Check first 4 bytes of header is *rmv
+	for(i=0;i<4;++i) if(c=_fgetc(RMV)!=header_1[i]) error("No RMV header");
+
+	//The getint2 function reads 2 bytes at a time
+	//In legitimate videos byte 4=0 and byte 5=1, getint2 sum is thus 1
+	if(getint2(RMV)!=1) error("Invalid video type");
+
+	//The getint functions reads 4 bytes at a time
+	fs=getint(RMV); 					//Gets byte 6-9
+	result_string_size=getint2(RMV); 	//Gets bytes 10-11
+	version_info_size=getint2(RMV); 	//Gets bytes 12-13
+	player_info_size=getint2(RMV); 		//Gets bytes 14-15
+	board_size=getint2(RMV);       		//Gets bytes 16-17
+	preflags_size=getint2(RMV);   		//Gets bytes 18-19
+	properties_size=getint2(RMV);  		//Gets bytes 20-21
+	vid_size=getint(RMV);           	//Gets bytes 22-25
+	cs_size=getint2(RMV);          		//Gets bytes 26-27
+	_fgetc(RMV);						//Gets byte 28 which is a newline
+	
+	//Length of result_string_size starts 3 bytes before 'LEVEL' and ends on the '#' before Version
+	//Version 2.2 was first to have a full length header
+	//Earlier versions could have maximum header length of 35 bytes if Intermediate and 9999.99
+	//This means it is Version 2.2 or later so we want to parse more of the header
+	if (result_string_size>35)
+	{
+	//Reads last part of string after '3BV'
+	for(i=0;i<result_string_size-32;++i) _fgetc(RMV);
+
+   	//Fetch those last 3 bytes which should contain 3bv (either :xx or xxx)
+   	//Note that lost games save 0 as the 3BV value
+   	for(i=0;i<3;++i) bbbv[i]=_fgetc(RMV);
+   	if (!isdigit(bbbv[0])) bbbv[0]=' ';
+   	if (!isdigit(bbbv[1])) bbbv[1]=' ';
+   	if (!isdigit(bbbv[2])) bbbv[2]=' ';
+
+   	//Throw away some bytes to get to Timestamp
+   	for(i=0;i<16;++i) _fgetc(RMV);
+
+   	//Fetch Timestamp
+   	for(i=0;i<10;++i) timestamp[i]=_fgetc(RMV);
+	}
+	
+   	//Release 2 beta and earlier versions do not have 3bv or Timestamp	
 	else
 	{
-		int op=board[index].opening;
-		int i;
-		for(i=0;i<size;++i)
-		{
-			if(board[i].opening2==op ||
-				board[i].opening==op)
-			{
-				//Open all numbers on the edge of the opening
-				if(!board[i].opened) open(i);
-				//Reduce premium of neighbouring cells
-				//Chording on neighbouring cells will no longer open this opening
-				--board[i].premium;
-			}
-		}
+	bbbv[0]='0';
+	timestamp[0]='0';
+   	for(i=0;i<result_string_size-3;++i) _fgetc(RMV);
 	}
-}
 
-//Flag
-void flag(int index)
-{
-	int rr,cc;
-	if(board[index].flagged) return;
-	++zini;
-	board[index].flagged=1;
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-			//Increase premium of neighbouring cells
-			//Placing a flag makes it 1 click more likely a chord can occur
-			++board[cc*h+rr].premium;
-}
+	//Throw away the 2 bytes '# ' before 'Vienna...'
+	_fgetc(RMV);
+	_fgetc(RMV);
 
-//Chord
-void chord(int index)
-{
-	int rr,cc;
-	++zini;
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-			reveal(cc*h+rr);
-}
+	//Program is 18 bytes 'Vienna Minesweeper'
+	for(i=0;i<18;++i) program[i]=_fgetc(RMV);
+	program[i]=0;
 
-//Click
-void click(int index)
-{
-	reveal(index);
-	++zini;
-}
+	//Throw away the ' - '
+	_fgetc(RMV);
+	_fgetc(RMV);
+	_fgetc(RMV);
 
-//Click inside an opening (not on the edge)
-void hit_openings()
-{
-	int j;
-	for(j=0;j<size;++j)
-		if(!board[j].number && !board[j].opened)
-		{
-			click(j);
-		}
-}
+	//Put remainder of version string into a new string
+	for(i=0;i<version_info_size-22;++i) version[i]=_fgetc(RMV);
+	version[i]=0;
 
-//Flags neighbouring mines
-void flagaround(int index)
-{
-	int rr,cc;
-	//Check neighbourhood
-	for(rr=board[index].rb;rr<=board[index].re;++rr)
-		for(cc=board[index].cb;cc<=board[index].ce;++cc)
-		{
-			int i=cc*h+rr;
-			if(board[i].mine) flag(i);
-		}
-}
+	//Home Edition 3.0H and Scoreganizer 3.0C and later have 1 extra byte (a period) before player name
+	_fgetc(RMV);
 
+	//Check next two bytes to see if player entered Name
+	num_player_info=getint2(RMV);
 
-
-//==============================================================================================
-//Function to calculate ZiNi and HZiNi
-//==============================================================================================
-void calc_zini()
-{
-	int i;
-	zini=0;
-	restartboard();
-	
-	//While non-mine cells remain unopened
-	while(closed_cells>m)
+	//Fetch Player fields (name, nick, country, token) if they exist
+	//These last 3 fields were defined in Viennasweeper 3.1 RC1
+	if(num_player_info>0)
 	{
-		int maxp=-1;
-		int curi=-1;
-		for(i=0;i<size;++i)
+		name_length=_fgetc(RMV);
+		for(i=0;i<name_length;++i) name[i]=_fgetc(RMV);
+		name[i]=0;
+	}
+	if(num_player_info>1)
+	{
+		nick_length=_fgetc(RMV);
+		for(i=0;i<nick_length;++i) nick[i]=_fgetc(RMV);
+		nick[i]=0;
+	}
+	if(num_player_info>2)
+	{
+		country_length=_fgetc(RMV);
+		for(i=0;i<country_length;++i) country[i]=_fgetc(RMV);
+		country[i]=0;
+	}
+	if(num_player_info>3)
+	{
+		token_length=_fgetc(RMV);
+		for(i=0;i<token_length;++i) token[i]=_fgetc(RMV);
+		token[i]=0;
+	}
+
+	//Throw away next 4 bytes
+	getint(RMV); 
+
+	//Get board size and Mine details
+	w=_fgetc(RMV); 		//Next byte is w so 8, 9 or 1E
+	h=_fgetc(RMV); 		//Next byte is h so 8, 9 or 10
+	m=getint2(RMV); 	//Next two bytes are number of mines
+
+	//Fetch board layout and put in memory
+	board=(int*)malloc(sizeof(int)*w*h);
+	for(i=0;i<w*h;++i) board[i]=0;
+
+   //Every 2 bytes is x,y with 0,0 being the top left corner
+	for(i=0;i<m;++i)
+	{
+		c=_fgetc(RMV);d=_fgetc(RMV);
+		if(c>w || d>h) error("Invalid mine position");
+		board[d*w+c]=1;
+	}
+   
+	//Check number of flags placed before game started
+	if(preflags_size)
+	{
+		num_preflags=getint2(RMV);
+		for(i=0;i<num_preflags;++i)
 		{
-			if(board[i].premium>maxp &&	!board[i].mine)
-			{
-				maxp=board[i].premium;
-				curi=i;
-			}
+			c=_fgetc(RMV);d=_fgetc(RMV);
+
+			video[cur].event=4;
+			video[cur].x=square_size/2+c*square_size;
+			video[cur].y=square_size/2+d*square_size;
+			video[cur].time=0;
+			cur++;
+
+			video[cur].event=5;
+			video[cur].x=square_size/2+c*square_size;
+			video[cur].y=square_size/2+d*square_size;
+			video[cur].time=0;
+			cur++;
 		}
+	}	
+	
+	//Fetch game properties
+	qm=_fgetc(RMV); 		//Value 1 if Questionmarks used, otherwise 0
+	nf=_fgetc(RMV);    		//Value 1 if no Flags were used, otherwise 0
+	mode=_fgetc(RMV);		//Value 0 for Classic, 1 UPK, 2 Cheat, 3 Density
+	level=_fgetc(RMV);		//Value 0 for Beg, 1 Int, 2 Exp, 3 Custom                              
+
+	//Throw away rest of properties
+	for(i=4;i<properties_size;++i) _fgetc(RMV);
+
+	//Each iteration reads one event
+	while(1)
+	{
+		video[cur].event=c=_fgetc(RMV);++i;
 		
-		//Premium has climbed into positive territory
-		if(curi!=-1)
-		{	
-			if(!board[curi].opened) click(curi);
-			flagaround(curi);
-			chord(curi);
+		//Get next 4 bytes containing time of event
+		if(!c)
+		{
+			getint(RMV);i+=4;
 		}
-		else
+		//Get mouse event (3 bytes time, 1 wasted, 2 width, 2 height)
+		else if(c<=7)
 		{
-			for(i=0;i<size;++i)
-				if(!board[i].opened && !board[i].mine &&
-					(!board[i].number || !board[i].opening))
-				{
-					curi=i;
-					break;
-				}
-			click(curi);
-		}			
-	}
-	
-	gzini=zini;
-	
-	//Start calculating HZiNi
-	for(i=0;i<size;++i)
-	{
-		board[i].premium=-(board[i].number)-2+getadj3bv(i);;
-	}
-	zini=0;
-	restartboard();
-	hit_openings();
-	
-	//While non-mine cells remain unopened
-	while(closed_cells>m)
-	{
-		int maxp=-1;
-		int curi=-1;
-		for(i=0;i<size;++i)
-		{
-			if(board[i].premium>maxp &&	!board[i].mine && board[i].opened)
+			i+=8;
+			video[cur].time=getint3(RMV);
+			_fgetc(RMV);
+			video[cur].x=getint2(RMV)-12;
+			video[cur].y=getint2(RMV)-56;
+			cur++;			
+			
+			//Viennasweeper does not record clicks before timer starts
+			//LR starts timer so the first LC is missed in the video file
+			//This code generates the missing LC in that case
+			//In other cases it generates a ghost event thus event[0] is empty			
+			if(is_first_event)
 			{
-				maxp=board[i].premium;
-				curi=i;
+				//Global variable set to 1 so on first iteration it becomes 0				
+				is_first_event=0;
+				//Clone first recorded event but set missing event to LC
+				video[cur].event=video[cur-1].event;
+				video[cur-1].event=2;
+				video[cur].time=video[cur-1].time;
+				video[cur].x=video[cur-1].x;
+				video[cur].y=video[cur-1].y;
+				cur++;
 			}
 		}
-		
-		//Premium has climbed into positive territory		
-		if(curi!=-1)
-		{	
-			if(!board[curi].opened) click(curi);
-			flagaround(curi);
-			chord(curi);
+		else if(c==8) error("Invalid event");
+		//Get board event (ie, 'pressed' or 'number 3')
+		else if(c<=14 || (c>=18 && c<=27))
+		{
+			i+=2;
+			video[cur].x=_fgetc(RMV)+1;
+			video[cur].y=_fgetc(RMV)+1;
+			cur++;				
 		}
-		else
+		//Get game status (ie, 'won')
+		else if(c<=17)
 		{
-			for(i=0;i<size;++i)
-				if(!board[i].opened && !board[i].mine &&
-					(!board[i].number || !board[i].opening))
-				{
-					curi=i;
-					break;
-				}
-			click(curi);
-		}			
-	}
-	hzini=zini;
-	restartboard();
-}
-
-
-//==============================================================================================
-//Function to check if mouse location is over the board
-//==============================================================================================
-int is_inside_board(int x,int y)
-{
-	return x>=0 && x<w && y>=0 && y<h;
-}
-
-
-//==============================================================================================
-//Functions to press cells
-//==============================================================================================
-
-//Press cell
-void push(int x,int y)
-{
-	if(no_board_events) return;
-	if(!board[x*h+y].opened && !board[x*h+y].flagged)
-	{
-		if(board[x*h+y].questioned)
-			fprintf(output,"Cell pressed (it is a Questionmark) %d %d\n",x+1,y+1);
-		else
-			fprintf(output,"Cell pressed %d %d\n",x+1,y+1);
-	}
-}
-
-//Check which cells to press
-void push_around(int x,int y)
-{
-	int i,j;
-	for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-		for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-			push(j,i);
-}
-
-
-//==============================================================================================
-//Functions to unpress cells (this does not open them)
-//==============================================================================================
-
-//Unpress cell
-void pop(int x,int y)
-{
-	if(!board[x*h+y].opened && !board[x*h+y].flagged)
-	{
-		if(board[x*h+y].questioned)
-			fprintf(output,"Cell released (it is a Questionmark) %d %d\n",x+1,y+1);
-		else
-			fprintf(output,"Cell released %d %d\n",x+1,y+1);
-	}
-}
-
-//Check which cells to unpress
-void pop_around(int x,int y)
-{
-	int i,j;
-	for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-		for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-			pop(j,i);
-}
-
-
-//==============================================================================================
-//Functions to check Win or Lose status
-//==============================================================================================
-void win()
-{
-	end_time=cur_time;
-	won=1;
-}
-
-//Print Solved 3bv
-void check_win()
-{
-	//This fixes a rounding error. The 3f rounds to 3 decimal places.
-	//Using 10,000 rounds the 4th decimal place first before 3f is calculated.
-	//This has the desired effect of truncating to 3 decimals instead of rounding.
-	int fix;
-	float fixfloated;
-	fix=(int)(cur_time)*10;
-	fixfloated=(float)fix/10000;
-	fprintf(stdout,"%.3f Solved 3BV: %d of %d\n",fixfloated,solved_bbbv,bbbv);
-	if(bbbv==solved_bbbv) win();
-}
-
-void fail()
-{
-	end_time=cur_time;
-	won=0;
-}
-
-
-//==============================================================================================
-//Functions for opening cells
-//==============================================================================================
-
-//Change cell status to open
-void show(int x,int y)
-{
-	int index=x*h+y;
-	fprintf(output,"Cell opened (Number %d) %d %d\n",board[index].number,x+1,y+1);
-	board[index].opened=1;
-	//Increment counters if cell belongs to an opening and if this iteration opens the last cell in that opening
-	if(board[index].opening) if(!(--size_ops[board[index].opening])) {++solved_ops;++solved_bbbv;}
-	//Increment counters if cell belongs to another opening and this iteration opens last cell in that opening	
-	if(board[index].opening2) if(!(--size_ops[board[index].opening2])) {++solved_ops;++solved_bbbv;}
-}
-
-//Check how many cells to change
-void show_opening(int op)
-{
-	int i,j,k=0;
-	for(i=0;i<w;++i) for(j=0;j<h;++j,++k) 
-		if(board[k].opening==op || board[k].opening2==op) 
-			if(!board[k].opened && !board[k].flagged) 
-				show(i,j);
-}
-
-//Perform checks before changing cell status
-void do_open(int x,int y)
-{
-	//Lose if cell is a mine
-	if(board[x*h+y].mine)
-	{
-		board[x*h+y].opened=1;
-		fprintf(output,"Cell opened (it is a Mine) %d %d\n",x+1,y+1); 
-		fail();
-	}
-	else
-	{
-		//Check cell is inside an opening (number zero)
-		if(!board[x*h+y].number) 
-		{
-			//Open correct number of cells			
-			show_opening(board[x*h+y].opening);	
-			check_win();	
-		}			
+			break;
+		}
 		else 
 		{
-			//Open single cell because it is a non-zero number
-			show(x,y);
-			if(!board[x*h+y].opening) 
-			{
-				++solved_bbbv;
-				//Increment count of solved islands if this is last cell of the island to be opened
-				if(!(--size_isls[board[x*h+y].island])) ++solved_isls;
-				check_win();
-			}
+			error("Invalid event");
 		}
 	}
-}
-
-
-//==============================================================================================
-//Functions to Flag, Mark and Chord
-//==============================================================================================
-
-//Count number of adjacent flags
-int flags_around(int x,int y)
-{
-	int i,j,res=0;
-	for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-		for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-			if(board[j*h+i].flagged) ++res;
-	return res;
-}
-
-//Chord
-void do_chord(int x,int y,int onedotfive)
-{
-	int wasted=1,i,j;
-	//Check cell is already open and number equals count of surrounding flags
-	if(board[x*h+y].number==flags_around(x,y) && board[x*h+y].opened)
-	{
-		//Check neighbourhood
-		for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-			for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-				//Lose game if cell is not flagged and is a mine
-				if(board[j*h+i].mine && !board[j*h+i].flagged)
-					fail();
-		//Check neighbourhood		
-		for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-			for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-				//Open cell if not flagged and not already open
-				if(!board[j*h+i].opened && !board[j*h+i].flagged)
-				{
-					do_open(j,i);
-					wasted=0;
-				}
-				//Chord was successful so flag was not wasted
-				else if(board[j*h+i].flagged && board[j*h+i].wasted_flag)
-				{
-					board[j*h+i].wasted_flag=0;
-					--wasted_flags;
-				}
-		//Chord has been wasted		
-		if(wasted)
-		{
-			++wasted_d_clicks;
-			if(onedotfive) ++wasted_clicks_15;
-		}
-	}
-	else
-	{
-		//Unpress chorded cells without opening them
-		pop_around(x,y);
-		++wasted_d_clicks; 
-		if(onedotfive) ++wasted_clicks_15;
-	}
-}
-
-//Flag
-void do_set_flag(int x,int y)
-{
-	//Note that the wasted_flag value becomes 0 after successful chord() function
-	board[x*h+y].flagged=board[x*h+y].wasted_flag=1;
-	fprintf(output,"Flag %d %d\n",x+1,y+1);
-	++flags;++wasted_flags;
-	//Increase misflag count because cell is not a mine
-	if(!board[x*h+y].mine) ++misflags;
-}
-
-//Questionmark
-void do_question(int x,int y)
-{
-	board[x*h+y].questioned=1;
-	fprintf(output,"Questionmark %d %d\n",x+1,y+1);
-}
-
-//Remove Flag or Questionmark
-void do_unset_flag(int x,int y)
-{
-	board[x*h+y].flagged=board[x*h+y].questioned=0;
-	fprintf(output,"Flag removed %d %d\n",x+1,y+1);
-	//Decrease flag count, increase unflag count
-	--flags;++unflags;
-	//Increase misunflag count because cell is not a mine
-	if(!board[x*h+y].mine) ++misunflags;
-}
-
-
-//Part of 'superflag' cheat function (flags neighbouring mines)
-void do_flag_around(int x,int y)
-{
-	int i,j;
-	//Check neighbourhood
-	for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-		for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-			if(!board[j*h+i].flagged && !board[j*h+i].opened)
-				do_set_flag(j,i);
-}
-
-//Part of 'superflag' cheat function (counts unopened neighbours)
-int closed_sq_around(int x,int y)
-{
-	int i,j,res=0;
-	//Check neighbourhood	
-	for(i=board[x*h+y].rb;i<=board[x*h+y].re;++i)
-		for(j=board[x*h+y].cb;j<=board[x*h+y].ce;++j)
-			if(!board[j*h+i].opened) ++res;
-	return res;
-}
-
-
-//==============================================================================================
-//Functions for clicking and moving the mouse
-//==============================================================================================
-
-//Function definition needed here because mouse_move() and left_click() reference each other
-void mouse_move(int x,int y,int prec_x,int prec_y);
-
-//Left click
-void left_click(int x,int y,int prec_x,int prec_y)
-{
-	if(!left) return;
-	if(x!=cur_x || y!=cur_y) mouse_move(x,y,prec_x,prec_y);
-	left=0;
-	if(!is_inside_board(x,y))
-	{
-		chorded=0;
-		return;
-	}
-	//Chord
-	if(right || shift_left || (superclick && board[x*h+y].opened))
-	{
-		++d_clicks;
-		if(onedotfive) ++clicks_15;
-		do_chord(x,y,onedotfive);
-		chorded=right;
-		shift_left=0;
-	}
-	//Left click
-	else	
-	{
-		//Rilian click
-		if(chorded)	
-		{
-			chorded=0;
-			++rilian_clicks;
-			if(no_rilian_clicks) return;
-		}
-		++l_clicks;
-		if(!board[x*h+y].opened && !board[x*h+y].flagged) do_open(x,y); else ++wasted_l_clicks;
-		chorded=0;
-	}
-	cur_x=x;cur_y=y;
-}
-
-//Mouse movement
-void mouse_move(int x,int y,int prec_x,int prec_y)
-{
-	if(is_inside_board(x,y))
-	{
-		if((left && right) || middle || shift_left) 
-		{
-			if(cur_x!=x || cur_y!=y)
-			{
-				pop_around(cur_x,cur_y);
-				push_around(x,y);
-			}
-		}
-		else if(superclick && left && board[cur_x*h+cur_y].opened)
-		{
-			pop_around(cur_x,cur_y);
-			if(board[x*h+y].opened)
-				push_around(x,y);
-			else
-				push(x,y);
-		}
-		else if(left && !chorded)
-		{
-			if(cur_x!=x || cur_y!=y)
-			{
-				pop(cur_x,cur_y);
-				push(x,y);
-			}
-			if(nono && (cur_x!=x || cur_y!=y))
-			{
-				int sl=shift_left;
-				left_click(x,y,cur_x,cur_y);
-				left=1;
-				shift_left=sl;
-			}
-		}
-	}
-	//Distance is measured using Manhattan metric instead of Euclidean
-	//Rationale is that pixels form a grid thus are not points
-	distance+=abs(cur_prec_x-prec_x)+abs(cur_prec_y-prec_y);
-	cur_prec_x=prec_x;cur_prec_y=prec_y;
 	
-	if(is_inside_board(x,y))
-	{
-		cur_x=x;cur_y=y;
-	}
+	//Number of game events	
+	size=cur+1;
+
+	return 1;
 }
 
-//Left button down
-void left_press(int x,int y,int prec_x,int prec_y)
-{
-	if(middle) return;
-	left=1;shift_left=0;
-	if(!is_inside_board(x,y)) return;
-	if(!right && !(superclick && board[x*h+y].opened))
-		push(x,y);
-	else
-		push_around(x,y);
-	if(elmar || nono)
-	{
-		left_click(x,y,prec_x,prec_y);
-		left=1;
-	}
-	cur_x=x;cur_y=y;
-}
 
-//Chord using Shift during LC-LR
-void left_press_with_shift(int x,int y,int prec_x,int prec_y)
-{
-	if(middle) return;
-	left=shift_left=1;
-	if(!is_inside_board(x,y)) return;
-	push_around(x,y);
-	if(elmar || nono)
-	{
-		left_click(x,y,prec_x,prec_y);
-		left=shift_left=1;
-	}
-	cur_x=x;cur_y=y;
-}
 
-//Right button down
-void right_press(int x,int y,int prec_x,int prec_y)
+//==============================================================================================
+//Function is used to print video data
+//==============================================================================================
+void writetxt()
 {
-	if(middle) return;
-	right=1;shift_left=0;
-	if(!is_inside_board(x,y)) return;
-	if(left) 
-		push_around(x,y);
-	else
-	{
-		if(!board[x*h+y].opened)
+	//Initialise local variables	
+	int i,j;
+	const char* level_names[]={"Beginner","Intermediate","Expert","Custom"};
+	const char* mode_names[]={"Classic","UPK","Cheat","Density"};
+
+	//Code version and Program
+	printf("RawVF_Version: Rev6.1\n");
+	printf("Program: %s\n",program);
+
+	//Print Version
+    printf("Version: ");
+
+	//There are several different Version string formats
+	//For example, 'Vienna Minesweeper - Scoreganizer Client Edition - Release 3.0C Copyright (C) 2008-2012'
+    //For example, 'Vienna Minesweeper - Home Edition - Release 3.0H Copyright (C) 2008-2012'
+	//For example, 'Vienna Minesweeper - Home Edition - Release 2.2 (c)2008'
+    //For example, 'Vienna Minesweeper - Home Edition - Release 2 beta.2008'
+
+    //This fetches the Version string but stops at '(' if it exists
+	for(i=0;i<sizeof(version);++i)
+    {
+   	if(version[i]!='(')
+        verstring[i]=version[i];
+     	else break;
+    }
+
+	//This deletes the word 'Copyright' from the above string
+    if(verstring[strlen(verstring)-10]=='C')
+    {
+   	for (i=0;i<strlen(verstring)-11;++i)
 		{
-			onedotfive=1;chorded=0;
-			if(board[x*h+y].flagged)
-			{
-				do_unset_flag(x,y);
-				if(!qm) do_question(x,y);
-			}
+		verlength[i]=verstring[i];
+		}
+		printf("%s\n",verlength);
+    }
+	
+	//This terminates the above string at the period for Release 2 beta and earlier
+	else if(verstring[strlen(verstring)-23]=='.')
+	{
+   	for (i=0;i<strlen(verstring)-28;++i)
+		{
+		verlength[i]=verstring[i];
+		}
+		printf("%s\n",verlength);
+	}
+	
+	//This is for any versions without a copyright notice or period in Version string
+	else
+	{
+		printf("%s\n",verstring);
+	}
+
+	//Print Player 
+	printf("Player: %s\n",name);
+	
+	//Print grid details	
+	printf("Level: %s\n",level_names[level]);
+	printf("Width: %d\n",w);
+	printf("Height: %d\n",h);
+	printf("Mines: %d\n",m);
+
+	//Print Marks
+	if(qm) printf("Marks: On\n");
+    else printf("Marks: Off\n");
+
+	//Print Time
+    printf("Time: ");
+
+
+	//Number events and win status events do not have a time
+	//So in most videos the 3rd or 4th last event is the final timed event
+	//Opening many cells on the last click needs a loop to find the last timed event
+   	for (i=size-3;i>size-20;--i)
+	{
+		print_event2(video+i);
+		if(score!=0)
+		{
+			//printf("%d.%03d\n",score/1000,score%1000);
+			printf("g3 \n");
+			score_check=1;
+		}
+		if(score==1)
+		{
+		break;
+		}
+	}
+
+	//Print 3bv and 3bvs
+	if(bbbv[0]!='0')
+	{
+		//Convert string to an integer
+		bbbvint=atoi(bbbv);
+		printf("BBBV: %d\n",bbbvint);
+		//You need to float 3bvs int otherwise integer/integer = integer.
+		bbbvs=(bbbvint*1000000)/(score);
+		bbbvs_final=(float)bbbvs/1000;
+		printf("BBBVS: %.03f\n",bbbvs_final);	
+	}   
+	//Release 2 beta and earlier do not have these values so print blank rows
+	else
+	{
+		printf("BBBV: \n");
+		printf("BBBVS: \n");		
+	}	
+
+	//Print Status
+	if(i=size-1)
+	{
+		printf("Status: ");
+		print_event2(video+i);
+	}	
+	
+	//Print Timestamp
+	if(timestamp[0]!='0')
+	{
+		printf("Timestamp: %s\n",timestamp);
+	}
+	else
+	{
+		printf("Timestamp: \n");
+	}	
+
+	//Print Mode
+	printf("Mode: %s\n",mode_names[mode]);
+
+	//Print Style
+	if(nf) printf("Style: NF\n");
+	else printf("Style: FL\n");         
+
+	//Print Board
+	printf("Board:\n");
+	for(i=0;i<h;++i)
+	{
+		for(j=0;j<w;++j)
+			if(board[i*w+j])
+				printf("*");
 			else
-			{
-				if(!qm || !board[x*h+y].questioned)
-					do_set_flag(x,y);
-				else
-				{
-					board[x*h+y].flagged=board[x*h+y].questioned=0;
-					fprintf(output,"Questionmark removed %d %d\n",x+1,y+1);
-				}
-			}
-			++r_clicks;
-		}
-		else if(superflag && board[x*h+y].opened)
-		{
-			if(board[x*h+y].number && board[x*h+y].number>=closed_sq_around(x,y))
-				do_flag_around(x,y);
-		}
+				printf("0");
+		printf("\n");
 	}
-	cur_x=x;cur_y=y;
-}
 
-//Right button up
-void right_click(int x,int y,int prec_x,int prec_y)
-{
-	if(!right) return;
-	right=shift_left=0;
-	if(!is_inside_board(x,y))
+	//Print Mouse events
+	printf("Events:\n");
+	printf("0.000 start\n");
+	for(i=0;i<size;++i)
 	{
-		chorded=left;
-		onedotfive=0;
-		return;
+		print_event(video+i);
 	}
-	//Chord
-	if(left)
-	{
-		pop_around(cur_x,cur_y);
-		do_chord(x,y,0);
-		++d_clicks;
-		chorded=1;
-	}
-	//Click did not produce a Flag or Chord	
-	else
-	{
-		//It was a RC not the beginning of a Chord
-		if(!onedotfive && !chorded)
-		{
-			++r_clicks;
-			++wasted_r_clicks;
-		}
-		chorded=0;
-	}
-	onedotfive=0;
-	cur_x=x;cur_y=y;
-}
-
-//Middle button down
-void middle_press(int x,int y,int prec_x,int prec_y)
-{
-	//Middle button resets these boolean values
-	shift_left=left=right=onedotfive=chorded=0;
-	middle=1;
-	if(!is_inside_board(x,y)) return;
-	push_around(x,y);
-}
-
-//Middle button up
-void middle_click(int x,int y,int prec_x,int prec_y)
-{
-	if(!middle) return;
-	middle=0;
-	if(!is_inside_board(x,y)) return;
-	do_chord(x,y,0);
-	++d_clicks;
 }
 
 
 
 //==============================================================================================
-//Function to convert string to double (decimal number with high precision)
-//==============================================================================================
-
-//This is a custom function to mimic atoi but for decimals
-double strtodouble(const char* str)
-{
-	double res=0.0;
-	int cur=-1,neg=0,len=strlen(str),hop=1;
-	while(str[++cur]==' ');
-	if(!str[cur]) return 0.0;
-	if(str[cur]=='-') 
-	{
-		neg=1;
-		++cur;
-	}
-	while(cur<len && isdigit(str[cur])) {res=res*10+str[cur++]-'0';}
-	if(str[cur++]!='.') return res;
-	while(cur<len && isdigit(str[cur])) 
-	{
-		res=res*10+str[cur++]-'0';	
-		hop*=10;
-	}
-	if(neg) res=-res;
-	return res/hop;
-}
-
-
-
-//==============================================================================================
-//Run program
+//Run program and display any error messages
 //==============================================================================================
 int main(int argc,char** argv)
 {
-	//Initialise local variables
-	int i,r,c,opts,std=0;
-
-	//Program can be run in command line as "program input.txt>output.txt"
+	//Program can be run in command line as "program video.rmv>output.txt"
 	//The output file is optional if you prefer printing to screen		
 	if(argc<2)
 	{
-		printf("Usage: rawvf2rawvf [-eirsz] [input] [output]\n");
-		printf("Options:\n");
-		printf(" e - do not rewrite board events\n");
-		printf(" i - do not check info contained in the header\n");
-		printf(" r - treat rilian clicks as left clicks\n");
-		printf(" s - read from the standard input\n");
-		printf(" z - do not calculate ZiNi\n");
-		return 2;
+		printf("Error 1: Name of input file missing\n");
+		printf("Usage: %s <input rmv> [nopause]\n",argv[0]);
+		pause();
+		return 0;
 	}
 	
-	//Set some global variables to their default value
-	no_board_events=0;
-	no_zini=0;
-	
-	//If parameter 1 has been entered apply selection when running the program
-	if((opts=(argv[1][0]=='-')))
+	//Open video file	
+	RMV=fopen(argv[1],"rb");
+
+	//Error if video is not an RMV file	
+	if(!RMV)
 	{
-		const char* v=argv[1];
-		while(*v)
-		{
-			if(*v=='e') 		no_board_events=1;
-			else if(*v=='i') 	no_check_info=1;
-			else if(*v=='z') 	no_zini=1;
-			else if(*v=='r') 	no_rilian_clicks=0;
-			else if(*v=='s') 	std=1;
-			++v;
-		}
+		printf("Error 2: Could not open RMV\n");
+		return 1;
+	}
+
+	//Error if video parsing fails
+	if(!readrmv())
+	{
+		printf("Error 3: Invalid RMV\n");
+		return 1;
 	}
 	
-	//If stream exists assign to 'input'
-	if(std)
-		input=stdin;
-	else
-	{
-		//Read the specified input file
-		input=fopen(argv[argc>=3+opts?argc-2:argc-1],"r");
-		if(!input) 
-		{
-			//Print error to screen if file cannot be opened
-			fprintf(stderr,"Can't open input file %s\n",argv[argc>=3+opts?argc-2:argc-1]);
-			return 3;
-		}
-	}
-	
-	//Check if output file has been specified
-	if(argc>=3+opts)
-	{
-		//Write to output file
-		output=fopen(argv[argc-1],"w+");
-		if(!output) 
-		{
-			//Print error to screen if file cannot be opened
-			fprintf(stderr,"Can't open output file %s\n",argv[argc-1]);
-			return 4;
-		}
-	}
-	//Else print results to output file
-	else output=stdout;	
-	
-	//Set some global variables to their default value
-	qm=elmar=nono=superclick=superflag=0;
-	
-	//Create an array containing stats we wish to calculate
-	const char* info[]={"RAW_Time","RAW_3BV","RAW_Solved3BV","RAW_3BV/s","RAW_ZiNi","RAW_ZiNi/s","RAW_HZiNi","RAW_HZiNi/s",
-						"RAW_Clicks","RAW_Clicks/s",
-						"RAW_LeftClicks","RAW_LeftClicks/s","RAW_RightClicks","RAW_RightClicks/s",
-						"RAW_DoubleClicks","RAW_DoubleClicks/s","RAW_WastedClicks","RAW_WastedClicks/s",
-						"RAW_WastedLeftClicks","RAW_WastedLeftClicks/s",
-						"RAW_WastedRightClicks","RAW_WastedRightClicks/s","RAW_WastedDoubleClicks",
-						"RAW_WastedDoubleClicks/s","RAW_1.5Clicks","RAW_1.5Clicks/s",
-						"RAW_IOE","RAW_Correctness","RAW_Throughput","RAW_ZNE","RAW_ZNT","RAW_HZNE","RAW_HZNT",
-						"RAW_Openings","RAW_Islands",
-						"RAW_Flags","RAW_WastedFlags","RAW_Unflags","RAW_Misflags","RAW_Misunflags",
-						"RAW_RilianClicks","RAW_RilianClicks/s"};
-						
-	//Initialise local variables		
-	//The size of char is 4 (32 bit) or 8 (64 bit) on Linux but is 4 in both cases for Windows
-	//Either way this should return the count of items in the info[] array
-	const int num_info=sizeof(info)/sizeof(char*);
-	int has_info[num_info];
-	long ptr_info[num_info];
-	int info_i[num_info];
-	double info_d[num_info];
-	
-	//Create array with default values for each stat in the info[] array
-	int int_info[]={0,1,1,0,1,0,1,0,
-							1,0,
-							1,0,1,0,
-							1,0,1,0,
-							1,0,
-							1,0,1,
-							0,1,0,
-							0,0,0,0,0,0,0,
-							1,1,
-							1,1,1,1,1,
-							1,0};
-							
-	//Set some local variables to default values					
-	int check_info[num_info];	
-	int ww=8,hh=8,mm=10,m_cl=1,no_mode=1;
-	int square_size=16;
-	int claims_win=0;
-	
-	//Clear some arrays related to info[]
-	for(i=0;i<num_info;++i) has_info[i]=0;
-	for(i=0;i<num_info;++i) check_info[i]=1&& !no_zini;
-	
-	//Clear some arrays related to board[]
-	for(i=0;i<MAXOPS;++i) size_ops[i]=0;
-	for(i=0;i<MAXISLS;++i) size_isls[i]=0;
+	//Print results, close file and free memory
+	writetxt();
+	fclose(RMV);free(board);
 
-	//Read the input file header and extract existing stats to output file (or screen)
-	while(1)
-	{
-		int info_str=0;
-		long ptr=ftell(input);
-		
-		//Read a line from input file and store in char event
-		fgets(event,MAXLEN,input);
-		
-		if(feof(input)) 
-		{
-			error("No board\n");
-		}		
-		
-		//Stop extracting lines once input file header reaches the board layout
-		if(opteq(event,"board")) break;
-		//Otherwise extract the game information
-		else if(opteq(event,"width")) w=atoi(event+6);
-		else if(opteq(event,"height")) h=atoi(event+7);
-		else if(opteq(event,"mines")) m=atoi(event+6);
-		else if(opteq(event,"marks")) qm=valeq(event+6,"on\n");
-		else if(opteq(event,"level"))
-		{
-			const char* e=event+6;
-			//Marathon is a Viennasweeper mode used in some tournaments
-			if(valeq(e,"Marathon"))
-				error("This program doesn't support marathon RawVF");
-			else if(valeq(e,"Beginner"))
-			{
-				ww=hh=8;mm=10;
-			}
-			else if(valeq(e,"Intermediate"))
-			{
-				ww=hh=16;mm=40;
-			}
-			else if(valeq(e,"Expert"))
-			{
-				ww=30;hh=16;mm=99;
-			}
-		}
-		else if(opteq(event,"Mode"))
-		{
-			no_mode=0;
-			m_cl=valeq(event+5,"Classic");
-		}
-		else
-			//Print any other lines in the input file header
-			for(i=0;i<num_info;++i)
-			{
-				if(opteq(event,info[i]))
-				{
-					has_info[i]=1;
-					ptr_info[i]=ptr+strlen(info[i])+1L;
-					info_str=1;
-					break;
-				}
-			}
-		//Write	event to the output file (or screen)
-		fputs(event,output);
-	}
-	
-	//Get number of cells in the board
-	board=(cell*)malloc(sizeof(cell)*(size=w*h));
-
-	//Writes stats and if no value prints blank value
-	for(i=0;i<num_info;++i)
-		if(!has_info[i])
-		{
-			fputs(info[i],output);
-			ptr_info[i]=ftell(output)+2L;	
-			fputs(":           \n",output);
-		}		
-	
-	//Reset any knowledge of cells
-	clearboard();
-	
-	//Check which cells are mines and note them with the '*' symbol
-	for(r=0;r<h;++r)
-	{
-		fgets(event,MAXLEN,input);
-		for(c=0;c<w;++c) board[c*h+r].mine=event[c]=='*';
-		//Write	board with mines to the output file (or screen)
-		fputs(event,output);
-	}	
-	
-	//Call function to get number of Openings and Islands
-	init_board();
-	
-	//Call function to calculate 3bv
-	calc_bbbv();
-	
-	//Call function to calculate ZiNi
-	if(!no_zini) calc_zini();	
-	
-	//Initialise variables with default values
-	solved_bbbv=distance=l_clicks=r_clicks=d_clicks=wasted_l_clicks=wasted_r_clicks=wasted_d_clicks=
-	clicks_15=wasted_clicks_15=flags=wasted_flags=unflags=misflags=misunflags=rilian_clicks=0;
-	left=right=middle=shift_left=chorded=onedotfive=0;
-	
-	//Write the game events
-	while(1)
-	{
-		int board_event,len;
-		fgets(event,MAXLEN,input);
-		if(feof(input)) break;
-		
-		len=strlen(event);
-		//Closed, Flag, Questionmark, Pressed & Pressed Questionmark, Nonstandard
-		board_event=len<=2 || event[0]=='c' || event[0]=='f' || event[0]=='q' || event[0]=='p' || event[0]=='n';
-		if(!no_board_events && board_event) continue;
-		
-		//Write	event to output file (or screen)
-		fputs(event,output);
-		
-		//Ignore certain board events
-		if(board_event) 
-			continue;
-		//Start (implemented in Viennasweeper)
-		else if(event[0]=='s')
-			continue;
-		//Won (implemented in Viennasweeper)
-		else if(event[0]=='w')
-			claims_win=1;
-		//Blast (implemented in Viennasweeper)
-		else if(event[0]=='b' && event[1]=='l')
-			continue;
-		//Boom (implemented in Freesweeper)
-		else if(event[0]=='b' && event[1]=='o')
-			continue;			
-		//Nonstandard (proposed in RAW standard)
-		else if(event[0]=='n' && event[1]=='o')
-			continue;
-		
-		//Mouse events and the function to call in each case
-		else if(isdigit(event[0]) || event[0]=='-')
-		{
-			int i=(event[0]=='-'?1:0);
-			void (*func)(int,int,int,int)=0;
-			int x,y,neg_x,neg_y;
-			
-			//Get the time of the event
-			cur_time=0;
-			while(event[i]!='.' && i<len) cur_time=cur_time*10+event[i++]-'0';
-			
-			//Deal with seconds, tenths and hundredths
-			cur_time=cur_time*1000+(event[i+1]-'0')*100+(event[i+2]-'0')*10;
-			//Include thousandths if available
-			if(isdigit(event[i+3])) cur_time+=(event[i+3]-'0');						
-			
-			while(event[++i]!=' ' && i<len);
-			while(event[++i]==' ' && i<len);
-			if(event[0]=='-') cur_time=0;
-			
-			//Get the type of event
-			if(i+1>=len) continue;
-			
-			//Left button
-			if(event[i]=='l')
-				if(event[i+1]=='r')
-					func=left_click;
-				else if(event[i+1]=='c')
-					func=left_press;
-				else
-					error("Unknown event");
-				
-			//Right button
-			else if(event[i]=='r')
-				if(event[i+1]=='r')
-					func=right_click;
-				else if(event[i+1]=='c')
-					func=right_press;
-				else
-					error("Unknown event");
-				
-			//Mouse movement and Middle button
-			else if(event[i]=='m')
-				if(event[i+1]=='v')
-					func=mouse_move;
-				else if(event[i+1]=='r')
-					func=middle_click;
-				else if(event[i+1]=='c')
-					func=middle_press;
-				else
-					error("Unknown event");
-
-			//Start (implemented in Viennasweeper)
-			else if(event[i]=='s')
-				if(event[i+1]=='t') 
-					continue;
-				//Scrolling (proposed in RAW standard)
-				else if(event[i+1]=='x' || event[i+1]=='y')
-					continue;
-				//Shift chord (implemented in Arbiter & Freesweeper)
-				else if(event[i+1]=='c')
-					func=left_press_with_shift;
-				else
-					error("Unknown event");
-			//Won (implemented in Viennasweeper)
-			else if(event[i]=='w')
-				claims_win=1;
-			//Blast (implemented in Viennasweeper)
-			else if(event[i]=='b' && event[i+1]=='l')
-				continue;
-			//Boom (implemented in Freesweeper)
-			else if(event[i]=='b' && event[i+1]=='o')
-				continue;				
-			//Nonstandard (proposed in RAW standard)
-			else if(event[i]=='n' && event[i+1]=='o')
-				continue;
-			else
-				error("Unknown event");			
-
-			while(event[++i]!='(' && i<len);
-			while(!isdigit(event[++i]) && i<len);
-			neg_x=event[i-1]=='-';
-			x=0;
-			while(isdigit(event[i]) && i<len) x=x*10+event[i++]-'0';
-			while(!isdigit(event[++i]));
-			if(neg_x) x=-x;
-			neg_y=event[i-1]=='-';
-			y=0;
-			while(isdigit(event[i]) && i<len) y=y*10+event[i++]-'0';
-			if(neg_y) y=-y;
-				
-			func(x/square_size,y/square_size,x,y);
-		}		
-	}		
-	
-	//Set some local variables	
-	if(!end_time) end_time=cur_time;
-	i=0;
-	int clicks=l_clicks+r_clicks+d_clicks;
-	int w_clicks=wasted_l_clicks+wasted_r_clicks+wasted_d_clicks;
-	int e_clicks=clicks-w_clicks;
-	double coeff=(double)solved_bbbv/bbbv;
-	
-	//Calculate all remaining stats	
-	info_d[i++]=end_time/1000.0;	
-	info_i[i++]=bbbv;
-	info_i[i++]=solved_bbbv;
-	info_d[i++]=solved_bbbv/info_d[0];
-	info_i[i++]=gzini;
-	info_d[i++]=gzini*solved_bbbv/(bbbv*info_d[0]);
-	info_i[i++]=hzini;
-	info_d[i++]=hzini*solved_bbbv/(bbbv*info_d[0]);
-	info_i[i++]=clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=l_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=r_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=d_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=w_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=wasted_l_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=wasted_r_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=wasted_d_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_i[i++]=clicks_15;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	info_d[i++]=(double)solved_bbbv/clicks;
-	info_d[i++]=(e_clicks)/(double)clicks;
-	info_d[i++]=(double)solved_bbbv/e_clicks;
-	info_d[i++]=(double)gzini*coeff/clicks;
-	info_d[i++]=(double)gzini*coeff/e_clicks;
-	info_d[i++]=(double)hzini*coeff/clicks;
-	info_d[i++]=(double)hzini*coeff/e_clicks;
-	info_i[i++]=openings;
-	info_i[i++]=islands;
-	info_i[i++]=flags;
-	info_i[i++]=wasted_flags;
-	info_i[i++]=unflags;
-	info_i[i++]=misflags;
-	info_i[i++]=misunflags;
-	info_i[i++]=rilian_clicks;
-	info_d[i]=info_i[i-1]/info_d[0];++i;
-	
-	//If input file header is read and contains game Status perform the following check
-	if(!no_check_info && claims_win && !won) 
-		fprintf(stderr,"File contains wrong info: it says the game was won while it was not\n");
-
-	//Write generated stats
-	for(i=0;i<num_info;++i)
-		//Continue until an empty info[i] value is reached
-		if(!check_info[i]) continue;
-		//If there is no input file header information
-		else if(!has_info[i])
-		{
-			//This reads the output file starting from the first row of generated stats
-			fseek(output,ptr_info[i],SEEK_SET);				
-			
-			//Print key and value pair if integer
-			if(int_info[i])
-				{
-				fprintf(output,"%d",info_i[i]);
-				}
-			//Print key and value pair if decimal			
-			else
-				{
-				//This fixes a rounding error. The 3f rounds to 3 decimal places.
-				//Using 10,000 rounds the 4th decimal place first before 3f is calculated.
-				//This has the desired effect of truncating to 3 decimals instead of rounding.
-				int fix;
-				float fixfloated;					
-				fix=(int)(info_d[i]*10000);
-				fixfloated=(float)fix/10000;					
-				fprintf(output,"%.3f",fixfloated);		
-				}
-		}
-		//If input file header did not exist or was intentionally not read perform error checks
-		else if(!no_check_info)
-		{
-			int j;double d,dd;
-			fseek(input,ptr_info[i],SEEK_SET);
-			fgets(event,MAXLEN,input);
-			if(int_info[i] && (j=atoi(event))!=info_i[i])
-				fprintf(stderr,"File contains wrong info:\n %s = %d while the file claims it's %d\n",
-						info[i],info_i[i],j);
-			else if(!int_info[i] && (((dd=(d=strtodouble(event))-info_d[i]))>=0.001 || dd<=-0.001))
-				fprintf(stderr,"File contains wrong info:\n %s = %.3f while the file claims it's %.3f\n",
-						info[i],info_d[i],d);
-		}
-	
-	free(board);
+	//Program ends with message to exit		
+	if(argc==2) pause();
 	return 0;
 }
-
