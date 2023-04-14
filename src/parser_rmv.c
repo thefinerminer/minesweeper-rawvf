@@ -520,8 +520,7 @@ void writetxt()
 		print_event2(video+i);
 		if(score!=0)
 		{
-			//printf("%d.%03d\n",score/1000,score%1000);
-			printf("g3 \n");
+			printf("%d.%03d\n",score/1000,score%1000);
 			score_check=1;
 		}
 		if(score==1)
