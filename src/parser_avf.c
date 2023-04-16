@@ -211,14 +211,14 @@ int readavf()
 
 		//Once found we move the 4 bytes along one position
 		cr[0]=cr[1];cr[1]=cr[2];cr[2]=cr[3];cr[3]=_fgetc(AVF);
+		
+	//Throw away the next byte (the first '[' before timestamp)
+	_fgetc(AVF);		
 	}
 	
 	//See if Questionmark option was turned on	
 	if(cr[0]!=17 && cr[0]!=127) return 0;
 	qm=(cr[0]==17);
-
-	//Throw away the next byte (the first '[' before timestamp)
-	_fgetc(AVF);
 
 	//Fetch timestamp
 	//Timestamp_a is when game starts, Timestamp_b is when game ends   
